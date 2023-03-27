@@ -1009,6 +1009,7 @@ def getEFIvariables_NtEnumerateSystemEnvironmentValuesEx2( nvram_buf ):
 
 class S3BootScriptType:
     EFI_BOOT_SCRIPT_TYPE_DEFAULT = 0x00
+    EFI_BOOT_SCRIPT_TYPE_HEADERLESS = 0x01
     EFI_BOOT_SCRIPT_TYPE_EDKCOMPAT = 0xAA
 
 
@@ -1297,17 +1298,74 @@ def parse_s3bootscript_entry(s3bootscript_type: int, script: bytes, off: int, lo
 
         s3script_entry = S3BOOTSCRIPT_ENTRY(s3bootscript_type, entry_index, off, entry_length, entry_data)
 
-    else:  # S3BootScriptType.EFI_BOOT_SCRIPT_TYPE_DEFAULT
+    elif S3BootScriptType.EFI_BOOT_SCRIPT_TYPE_HEADERLESS == s3bootscript_type:
+        hdr_length = 0
+        f = '<BB'
+        opcode, width = struct.unpack(f, script[off: off + 2])
 
-        fhdr = '<II'
-        hdr_length = struct.calcsize(fhdr)
-        f = fhdr + 'B'
-        if remaining_len < (hdr_length + 1):
-            if logger().HAL:
-                logger().log_warning(f'The script should have at least 0x{hdr_length + 1:X} bytes to parse next entry')
+        entry_index = 0 if entry_index is None else entry_index+1
+        #print(f'entry_index 0x{entry_index:X} op:{opcode} width:{width}')
+
+        if opcode == 0x00:
+            width = script[off+1]
+            if width == 0:
+                entry_length = 17 # including the opcode
+                fhdr = '<BHIIIB'
+                x1, io_port, x2, x3, x4, val = struct.unpack(fhdr, script[off+1:off+entry_length])
+            elif width == 0x02:
+                entry_length = 20
+            else:
+                print(f'unkown width 0x{width:02x}')
+                return (0, None)
+        elif opcode == 0x01:
+            entry_length = 24 # including the opcode
+            fhdr = '<BBBIIIII'
+            b1, b2, b3, u4, u5, u6, u7, u8 = struct.unpack(fhdr, script[off+1:off+entry_length])
+        elif opcode == 0x02:
+            width = script[off+1]
+            if width == 0:
+                entry_length = 25 # including the opcode
+                fhdr = '<BBBIIIIIB'
+                b1, b2, b3, u4, addr, u5, u6, u7, b8 = struct.unpack(fhdr, script[off+1:off+entry_length])
+            elif width == 1:
+                entry_length = 26 # including the opcode
+            elif width == 2:
+                entry_length = 28 # including the opcode
+            else:
+                print(f'unkown width 0x{width:02x}')
+                return (0, None)
+        elif opcode == 0x03:
+            entry_length = 32 # including the opcode
+            fhdr = '<BBBIIIIIII'
+            x1, x2, x3, x4, addr, x5, mask, x6, val, x7 = struct.unpack(fhdr, script[off+1:off+entry_length])
+        elif opcode == 0x04:
+            width = script[off+1]
+            if width == 0:
+                entry_length = 25
+            elif width == 1:
+                entry_length = 26
+            elif width == 2:
+                entry_length = 28 # including the opcode
+                fhdr = '<BHIIIIII'
+                b2, h3, u4, u5, u6, u7, u8, u9 = struct.unpack(fhdr, script[off+1:off+entry_length])
+            else:
+                print(f'unkown width 0x{width:02x}')
+                return (0, None)
+        elif opcode == 0x05:
+            entry_length = 32 # including the opcode
+            #fhdr = '<BBBIIIIIII'
+            #x1, x2, x3, x4, addr, x5, mask, x6, val, x7 = struct.unpack(fhdr, script[off+1:off+entry_length])
+        elif opcode == 0x81:
+            entry_length = 32 # including the opcode
+            fhdr = '<BBBIIIIIII'
+            b1, b2, b3, u4, addr, u5, u6, u7, u8, u9 = struct.unpack(fhdr, script[off+1:off+entry_length])
+            print(f'{b1} {b2} {b3} addr=0x{addr:08x} {u5} {u6} {u7} {u8} {u9}')
+        elif opcode == 0xff:
+            entry_length = 2
+        else:
+            print(f'unknown opcode 0x{opcode:02X}')
             return (0, None)
 
-        entry_index, entry_length, opcode = struct.unpack(f, script[off: off + hdr_length + 1])
         if S3BootScriptOpcode_MDE.EFI_BOOT_SCRIPT_TERMINATE_OPCODE == opcode:
             entry_length = hdr_length + 1
             entry_index = -1
@@ -1320,6 +1378,34 @@ def parse_s3bootscript_entry(s3bootscript_type: int, script: bytes, off: int, lo
         s3script_entry = S3BOOTSCRIPT_ENTRY(s3bootscript_type, entry_index, off, entry_length, entry_data)
         s3script_entry.header_length = hdr_length
 
+    else:  # S3BootScriptType.EFI_BOOT_SCRIPT_TYPE_DEFAULT
+
+        fhdr = '<II'
+        hdr_length = struct.calcsize(fhdr)
+        print(f'hdr_length={hdr_length} bytes (fixed)')
+        f = fhdr + 'B'
+        if remaining_len < (hdr_length + 1):
+            if logger().HAL:
+                logger().log_warning(f'The script should have at least 0x{hdr_length + 1:X} bytes to parse next entry')
+            return (0, None)
+
+        entry_index, entry_length, opcode = struct.unpack(f, script[off: off + hdr_length + 1])
+        print(f'entry_index 0x{entry_index:X} len:{entry_length} op:{opcode}')
+        if S3BootScriptOpcode_MDE.EFI_BOOT_SCRIPT_TERMINATE_OPCODE == opcode:
+            entry_length = hdr_length + 1
+            entry_index = -1
+        entry_data = script[off + hdr_length: off + entry_length]
+
+        print(f'entry_index {entry_index} len:{entry_length} op:{opcode} data:{entry_data}')
+
+        if entry_length > MAX_S3_BOOTSCRIPT_ENTRY_LENGTH:
+            logger().log_error(f'[uefi] Unrecognized S3 boot script format (entry length = 0x{entry_length:X})')
+            return (0, None)
+
+        s3script_entry = S3BOOTSCRIPT_ENTRY(s3bootscript_type, entry_index, off, entry_length, entry_data)
+        print(f's3script_entry: {s3script_entry}')
+        s3script_entry.header_length = hdr_length
+
     s3script_entry.decoded_opcode = decode_s3bs_opcode(s3bootscript_type, s3script_entry.data)
 
     if log_script:
@@ -1330,6 +1416,8 @@ def parse_s3bootscript_entry(s3bootscript_type: int, script: bytes, off: int, lo
 def encode_s3bootscript_entry(entry) -> Optional[bytes]:
     if S3BootScriptType.EFI_BOOT_SCRIPT_TYPE_EDKCOMPAT == entry.script_type:
         entry_hdr_buf = struct.pack('<HB', entry.decoded_opcode.opcode, entry.length)
+    elif S3BootScriptType.EFI_BOOT_SCRIPT_TYPE_HEADERLESS == entry.script_type:
+        entry_hdr_buf = b''
     else:  # S3BootScriptType.EFI_BOOT_SCRIPT_TYPE_DEFAULT
         entry_hdr_buf = struct.pack('<II', entry.index, entry.length)
 
@@ -1367,6 +1455,9 @@ def id_s3bootscript_type(script: bytes, log_script: bool = False) -> Tuple[int, 
             logger().log(f'[uefi] Start opcode 0x{start_op:X}')
         # MdeModulePkg\Library\PiDxeS3BootScriptLib\BootScriptInternalFormat.h
         script_header_length = struct.calcsize("<HBHLHH")
+    elif S3BootScriptOpcode_MDE.EFI_BOOT_SCRIPT_MEM_READ_WRITE_OPCODE == start_op:
+        logger().log_hal('S3 Boot Script HEADERLESS Parser')
+        script_type = S3BootScriptType.EFI_BOOT_SCRIPT_TYPE_HEADERLESS
     else:
         logger().log_hal('S3 Boot Script DEFAULT Parser')
         script_type = S3BootScriptType.EFI_BOOT_SCRIPT_TYPE_DEFAULT
